@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { UploadBox } from '../components/UploadBox';
-import { apiService } from '../services/api';
+import { apiService, getImageUrl } from '../services/api';
 
 interface ReportFoundProps {
   onNavigate: (path: string, params?: any) => void;
@@ -21,8 +21,20 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!image) {
+      setErrorMessage('Please upload a photo of the found item.');
+      return;
+    }
+    if (!color.trim()) {
+      setErrorMessage('Please enter the primary color of the found item.');
+      return;
+    }
     if (!location.trim()) {
       setErrorMessage('Please enter the location where you found the item.');
+      return;
+    }
+    if (!description.trim()) {
+      setErrorMessage('Please provide a general description of the item or where it is deposited.');
       return;
     }
 
@@ -31,22 +43,55 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
 
     try {
       const formData = new FormData();
-      if (image) {
-        formData.append('image', image);
-      }
+      formData.append('image', image);
       formData.append('category', category);
-      if (color) formData.append('color', color);
-      if (brand) formData.append('brand', brand);
-      formData.append('location', location);
-      formData.append('date_time', dateTime || new Date().toISOString());
-      formData.append('description', description);
+      formData.append('color', color.trim());
+      if (brand.trim()) formData.append('brand', brand.trim());
+      formData.append('location', location.trim());
+      formData.append('date_time', dateTime.trim() || new Date().toISOString());
+      formData.append('description', description.trim());
 
-      await apiService.createFoundReport(formData);
+      const res = await apiService.createFoundReport(formData);
+      const itemId = res.id || res.item_id;
+
+      // Save found item to local session records
+      const foundRecord = {
+        id: itemId,
+        item_id: itemId,
+        title: `${res.color} ${res.category}`,
+        type: 'found',
+        category: res.category,
+        color: res.color,
+        brand: res.brand,
+        location: res.location,
+        date_time: res.date_time,
+        description: res.description,
+        image_url: getImageUrl(res.image_path),
+        image_path: res.image_path,
+        status: res.status || 'active',
+        created_at: res.created_at,
+      };
+
+      try {
+        const storedReports = JSON.parse(localStorage.getItem('smart_lost_found_user_reports') || '[]');
+        localStorage.setItem(
+          'smart_lost_found_user_reports',
+          JSON.stringify([foundRecord, ...storedReports.filter((r: any) => r.id !== itemId)])
+        );
+
+        const storedFound = JSON.parse(localStorage.getItem('smart_lost_found_found_items') || '[]');
+        localStorage.setItem(
+          'smart_lost_found_found_items',
+          JSON.stringify([foundRecord, ...storedFound.filter((r: any) => r.id !== itemId)])
+        );
+      } catch (storageErr) {
+        console.warn('LocalStorage save error:', storageErr);
+      }
+
       setSubmitted(true);
     } catch (err: any) {
-      console.warn('Backend found report upload fallback:', err.message);
-      // Friendly fallback so user flow continues seamlessly
-      setSubmitted(true);
+      console.error('Found report submission error:', err);
+      setErrorMessage(err.message || 'Failed to submit found report. Please check backend connection.');
     } finally {
       setLoading(false);
     }
@@ -63,7 +108,7 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
           Thank you for reporting this found item!
         </h2>
         <p className="text-sm text-gray-600 dark:text-[#c5c9c5] mt-2 max-w-md">
-          Your report is now active in the community registry. If the owner files a lost report, our matching process will alert them.
+          Your report is now active in the community registry. When an owner files a lost report, our matching process will alert them.
         </p>
 
         <div className="flex flex-wrap items-center justify-center gap-4 mt-8">
@@ -103,7 +148,7 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
           Did you find someone's lost item?
         </h1>
         <p className="text-sm text-gray-600 dark:text-[#c5c9c5] mt-1">
-          Upload a quick photo and details. Your act of kindness helps reconnect owners with their belongings.
+          Upload a clear photo and details. Your act of kindness helps reconnect owners with their belongings.
         </p>
       </div>
 
@@ -118,7 +163,7 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
         {/* Photo Upload Box */}
         <UploadBox
           onImageSelected={(file) => setImage(file)}
-          label="Photo of Found Item (Recommended)"
+          label="Photo of Found Item *"
           hint="Take or upload a clear photo of the item"
         />
 
@@ -146,7 +191,7 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
 
           <div>
             <label className="block text-sm font-semibold text-gray-900 dark:text-[#f0f2f0] mb-1.5">
-              Item Color
+              Item Color *
             </label>
             <input
               type="text"
@@ -154,6 +199,7 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
               onChange={(e) => setColor(e.target.value)}
               placeholder="e.g. Black, Navy Blue, Silver"
               className="w-full bg-gray-50 dark:bg-[#222523] border border-gray-200 dark:border-[#2f3330] rounded-xl px-3.5 py-2.5 text-sm text-gray-900 dark:text-[#f0f2f0] focus:outline-none focus:border-[#346b4f]"
+              required
             />
           </div>
         </div>
@@ -191,7 +237,7 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
         {/* Additional Description */}
         <div>
           <label className="block text-sm font-semibold text-gray-900 dark:text-[#f0f2f0] mb-1.5">
-            General Description
+            General Description *
           </label>
           <textarea
             value={description}
@@ -199,6 +245,7 @@ export const ReportFound: React.FC<ReportFoundProps> = ({ onNavigate }) => {
             rows={3}
             placeholder="Describe general condition, station office where deposited, or contact instructions..."
             className="w-full bg-gray-50 dark:bg-[#222523] border border-gray-200 dark:border-[#2f3330] rounded-xl px-3.5 py-2.5 text-sm text-gray-900 dark:text-[#f0f2f0] focus:outline-none focus:border-[#346b4f]"
+            required
           />
         </div>
 

@@ -1,13 +1,33 @@
-import { MatchResponse, VerificationResult } from '../types';
+import {
+  ItemResponse,
+  MatchResponse,
+  ItemMatchesListResponse,
+  VerificationQuestionResponse,
+  VerificationResult,
+} from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+
+/**
+ * Convert backend image_path to a full HTTP URL
+ */
+export function getImageUrl(imagePath?: string | null): string {
+  if (!imagePath) return '';
+  if (imagePath.startsWith('http://') || imagePath.startsWith('https://') || imagePath.startsWith('data:')) {
+    return imagePath;
+  }
+  const backendBase = API_BASE_URL.replace(/\/api\/?$/, '');
+  const cleanPath = imagePath.replace(/\\/g, '/').replace(/^\//, '');
+  return `${backendBase}/${cleanPath}`;
+}
 
 /**
  * Helper for making API requests with standard error handling
  */
 async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE_URL.replace(/\/$/, '')}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
-  
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${API_BASE_URL.replace(/\/$/, '')}${cleanEndpoint}`;
+
   try {
     const response = await fetch(url, {
       ...options,
@@ -18,7 +38,12 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || errorData.detail || `Server returned status ${response.status}`);
+      const message =
+        errorData.error?.message ||
+        errorData.detail ||
+        (Array.isArray(errorData) ? errorData.map((e: any) => e.msg || e).join(', ') : null) ||
+        `Server returned status ${response.status}`;
+      throw new Error(message);
     }
 
     return await response.json();
@@ -31,26 +56,48 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
 export const apiService = {
   /**
    * 1. Create Lost Report (POST /items/lost)
+   * Multipart/form-data: image, description, category, color, brand, location, date_time
    */
-  async createLostReport(formData: FormData): Promise<{ item_id: string; status: string }> {
-    return apiFetch<{ item_id: string; status: string }>('/items/lost', {
+  async createLostReport(formData: FormData): Promise<ItemResponse> {
+    const res = await apiFetch<ItemResponse>('/items/lost', {
       method: 'POST',
       body: formData,
     });
+    return {
+      ...res,
+      item_id: res.id || res.item_id,
+    };
   },
 
   /**
    * 2. Create Found Report (POST /items/found)
+   * Multipart/form-data: image, description, category, color, brand, location, date_time
    */
-  async createFoundReport(formData: FormData): Promise<{ item_id: string; status: string }> {
-    return apiFetch<{ item_id: string; status: string }>('/items/found', {
+  async createFoundReport(formData: FormData): Promise<ItemResponse> {
+    const res = await apiFetch<ItemResponse>('/items/found', {
       method: 'POST',
       body: formData,
     });
+    return {
+      ...res,
+      item_id: res.id || res.item_id,
+    };
   },
 
   /**
-   * 3. Find Matches (POST /items/{item_id}/match)
+   * 3. Get Single Item Details (GET /items/{item_id})
+   */
+  async getItem(itemId: string): Promise<ItemResponse> {
+    const res = await apiFetch<ItemResponse>(`/items/${itemId}`);
+    return {
+      ...res,
+      item_id: res.id || res.item_id,
+    };
+  },
+
+  /**
+   * 4. Find Matches (POST /items/{item_id}/match)
+   * Note: Triggers AI reasoning; called only in user workflow, not during testing.
    */
   async findMatches(itemId: string): Promise<MatchResponse> {
     return apiFetch<MatchResponse>(`/items/${itemId}/match`, {
@@ -59,54 +106,48 @@ export const apiService = {
   },
 
   /**
-   * 4. Get Matches (GET /matches/{item_id})
+   * 5. Get Saved Matches for Item (GET /matches/{item_id})
    */
-  async getMatches(itemId: string): Promise<MatchResponse> {
-    return apiFetch<MatchResponse>(`/matches/${itemId}`);
+  async getMatches(itemId: string): Promise<ItemMatchesListResponse> {
+    return apiFetch<ItemMatchesListResponse>(`/matches/${itemId}`);
   },
 
   /**
-   * 5. Verification (POST /matches/{match_id}/verify)
+   * 6. Get Verification Question (GET /matches/{match_id}/verification-question)
+   */
+  async getVerificationQuestion(matchId: string): Promise<VerificationQuestionResponse> {
+    return apiFetch<VerificationQuestionResponse>(`/matches/${matchId}/verification-question`);
+  },
+
+  /**
+   * 7. Verify Ownership (POST /matches/{match_id}/verify)
    */
   async verifyOwnership(matchId: string, answer: string): Promise<VerificationResult> {
-    return apiFetch<VerificationResult>(`/matches/${matchId}/verify`, {
+    const res = await apiFetch<{ verified: boolean; message: string }>(`/matches/${matchId}/verify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ answer }),
     });
+    return {
+      match_id: matchId,
+      verified: res.verified,
+      status: res.verified ? 'verified' : 'failed',
+      message: res.message,
+    };
   },
 
   /**
-   * 6. Update Item Status (PATCH /items/{item_id}/status)
+   * 8. Update Item Status (PATCH /items/{item_id}/status)
    */
-  async updateItemStatus(itemId: string, status: string): Promise<{ item_id: string; status: string }> {
-    return apiFetch<{ item_id: string; status: string }>(`/items/${itemId}/status`, {
+  async updateItemStatus(itemId: string, status: string): Promise<ItemResponse> {
+    return apiFetch<ItemResponse>(`/items/${itemId}/status`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ status }),
     });
-  },
-
-  /**
-   * 7. Get Recent Found Items (GET /items/found)
-   */
-  async getFoundItems(category?: string, query?: string): Promise<any[]> {
-    const params = new URLSearchParams();
-    if (category && category !== 'All') params.append('category', category);
-    if (query) params.append('query', query);
-    
-    const queryString = params.toString() ? `?${params.toString()}` : '';
-    return apiFetch<any[]>(`/items/found${queryString}`);
-  },
-
-  /**
-   * 8. Get User Reports (GET /reports)
-   */
-  async getUserReports(): Promise<any[]> {
-    return apiFetch<any[]>('/reports');
   },
 };

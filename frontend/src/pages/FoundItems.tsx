@@ -3,7 +3,7 @@ import { ItemCard } from '../components/ItemCard';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingState } from '../components/LoadingState';
 import { ErrorState } from '../components/ErrorState';
-import { apiService } from '../services/api';
+import { apiService, getImageUrl } from '../services/api';
 
 interface FoundItemsProps {
   onNavigate: (path: string, params?: any) => void;
@@ -28,58 +28,34 @@ export const FoundItems: React.FC<FoundItemsProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const data = await apiService.getFoundItems(selectedCategory, query);
-      setItems(data || []);
+      // Load community-reported found items from session records
+      const storedFound: any[] = JSON.parse(
+        localStorage.getItem('smart_lost_found_found_items') || '[]'
+      );
+
+      // Refresh items with backend live status if available
+      const enrichedFound = await Promise.all(
+        storedFound.map(async (item) => {
+          try {
+            if (item.id) {
+              const live = await apiService.getItem(item.id);
+              return {
+                ...item,
+                status: live.status || item.status,
+                image_url: live.image_path ? getImageUrl(live.image_path) : item.image_url,
+              };
+            }
+          } catch {
+            // Keep local data if single item lookup is unavailable
+          }
+          return item;
+        })
+      );
+
+      setItems(enrichedFound);
     } catch (err: any) {
-      console.warn('Backend API fetch fallback:', err.message);
-      // Fallback mock items when backend dataset is empty or initializing
-      setItems([
-        {
-          id: 'f1',
-          title: 'Black Leather Wallet',
-          location: 'Andheri Station, Platform 2',
-          date_time: 'Today, 2:30 PM',
-          image_url: 'https://images.unsplash.com/photo-1627123424574-724758594e93?w=500&auto=format&fit=crop&q=60',
-          category: 'Wallets',
-          status: 'unclaimed',
-        },
-        {
-          id: 'f2',
-          title: 'House Keys on Braid Fob',
-          location: 'Dadar Western Line',
-          date_time: 'Today, 11:30 AM',
-          image_url: 'https://images.unsplash.com/photo-1582142839970-2b93227ef846?w=500&auto=format&fit=crop&q=60',
-          category: 'Keys',
-          status: 'unclaimed',
-        },
-        {
-          id: 'f3',
-          title: 'AirPods Charging Case',
-          location: 'Bandra Bandstand Bench',
-          date_time: 'Today, 9:15 AM',
-          image_url: 'https://images.unsplash.com/photo-1600294037681-c80b4cb5b434?w=500&auto=format&fit=crop&q=60',
-          category: 'Earbuds',
-          status: 'unclaimed',
-        },
-        {
-          id: 'f4',
-          title: 'Navy Canvas Backpack',
-          location: 'Churchgate Concourse',
-          date_time: 'Yesterday',
-          image_url: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=500&auto=format&fit=crop&q=60',
-          category: 'Bags',
-          status: 'unclaimed',
-        },
-        {
-          id: 'f5',
-          title: 'Silver Stainless Watch',
-          location: 'CSMT Railway Waiting Hall',
-          date_time: 'Yesterday, 6:00 PM',
-          image_url: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=500&auto=format&fit=crop&q=60',
-          category: 'Glasses & Watches',
-          status: 'unclaimed',
-        },
-      ]);
+      console.warn('Error fetching found items:', err.message);
+      setItems([]);
     } finally {
       setLoading(false);
     }
@@ -180,13 +156,17 @@ export const FoundItems: React.FC<FoundItemsProps> = ({
 
       {/* Grid Content */}
       {loading ? (
-        <LoadingState message="Loading community found feed..." subtext="Retrieving recent reports from the database" />
+        <LoadingState message="Loading community found feed..." subtext="Retrieving items from the registry" />
       ) : error ? (
         <ErrorState message={error} onRetry={fetchItems} />
       ) : filteredItems.length === 0 ? (
         <EmptyState
-          title="No items found"
-          message={`No found items matching "${query || selectedCategory}" are currently listed.`}
+          title="No found items yet"
+          message={
+            query || selectedCategory !== 'All'
+              ? `No found items matching "${query || selectedCategory}" are currently listed.`
+              : 'No items have been reported found yet. Once a member reports a found item, it will appear here.'
+          }
           actionLabel="Report a Found Item"
           onAction={() => onNavigate('report-found')}
         />
@@ -195,12 +175,12 @@ export const FoundItems: React.FC<FoundItemsProps> = ({
           {filteredItems.map((item) => (
             <ItemCard
               key={item.id || item.item_id}
-              title={item.title || item.category || 'Found Item'}
-              location={item.location || 'Unknown Location'}
+              title={item.title || `${item.color || ''} ${item.category || 'Found Item'}`}
+              location={item.location || 'Reported Location'}
               date={item.date_time || 'Recently'}
               imageUrl={item.image_url}
-              status={item.status || 'unclaimed'}
-              onClick={() => onNavigate('match-details', { matchId: item.id || item.item_id, item })}
+              status={item.status || 'active'}
+              onClick={() => onNavigate('match-details', { matchId: item.id || item.item_id, match: item })}
             />
           ))}
         </div>

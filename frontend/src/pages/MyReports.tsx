@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingState } from '../components/LoadingState';
-import { apiService } from '../services/api';
+import { apiService, getImageUrl } from '../services/api';
 
 interface MyReportsProps {
   onNavigate: (path: string, params?: any) => void;
@@ -13,49 +13,42 @@ export const MyReports: React.FC<MyReportsProps> = ({ onNavigate }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchReports = async () => {
+    const loadReports = async () => {
       setLoading(true);
       try {
-        const data = await apiService.getUserReports();
-        setReports(data || []);
+        const storedReports: any[] = JSON.parse(
+          localStorage.getItem('smart_lost_found_user_reports') || '[]'
+        );
+
+        // Refresh current status from backend for each stored report
+        const updatedReports = await Promise.all(
+          storedReports.map(async (rep) => {
+            try {
+              if (rep.id) {
+                const liveItem = await apiService.getItem(rep.id);
+                return {
+                  ...rep,
+                  status: liveItem.status || rep.status,
+                  image_url: liveItem.image_path ? getImageUrl(liveItem.image_path) : rep.image_url,
+                };
+              }
+            } catch {
+              // Retain local status if backend item lookup fails
+            }
+            return rep;
+          })
+        );
+
+        setReports(updatedReports);
       } catch (err: any) {
-        console.warn('My Reports API fallback:', err.message);
-        // Fallback reports array for visual design preview
-        setReports([
-          {
-            id: 'rep_1',
-            title: 'Black Leather Wallet',
-            type: 'lost',
-            location: 'Dadar Western Station',
-            date_time: 'Oct 1, 2026',
-            status: 'potential_match',
-            image_url: 'https://images.unsplash.com/photo-1544816155-12df9643f363?w=500&auto=format&fit=crop&q=80',
-          },
-          {
-            id: 'rep_2',
-            title: 'House Keys on Braid Fob',
-            type: 'found',
-            location: 'Andheri West Metro Station',
-            date_time: 'Sep 29, 2026',
-            status: 'unclaimed',
-            image_url: 'https://images.unsplash.com/photo-1582142839970-2b93227ef846?w=500&auto=format&fit=crop&q=60',
-          },
-          {
-            id: 'rep_3',
-            title: 'Wireless AirPods Case',
-            type: 'lost',
-            location: 'Bandra Bandstand',
-            date_time: 'Sep 25, 2026',
-            status: 'resolved',
-            image_url: 'https://images.unsplash.com/photo-1600294037681-c80b4cb5b434?w=500&auto=format&fit=crop&q=60',
-          },
-        ]);
+        console.warn('Error reading reports:', err.message);
+        setReports([]);
       } finally {
         setLoading(false);
       }
     };
 
-    fetchReports();
+    loadReports();
   }, []);
 
   return (
@@ -91,11 +84,11 @@ export const MyReports: React.FC<MyReportsProps> = ({ onNavigate }) => {
       </div>
 
       {loading ? (
-        <LoadingState message="Loading your reports..." subtext="Retrieving your item status from your session" />
+        <LoadingState message="Loading your reports..." subtext="Checking latest status from backend" />
       ) : reports.length === 0 ? (
         <EmptyState
           title="No reports filed yet"
-          message="You haven't filed any lost or found reports yet."
+          message="You haven't filed any lost or found reports yet in this session."
           actionLabel="Report a Lost Item"
           onAction={() => onNavigate('report-lost')}
           icon="folder_open"
@@ -106,8 +99,8 @@ export const MyReports: React.FC<MyReportsProps> = ({ onNavigate }) => {
             <div
               key={report.id}
               onClick={() => {
-                if (report.status === 'potential_match') {
-                  onNavigate('possible-matches', { itemId: report.id });
+                if (report.type === 'lost') {
+                  onNavigate('possible-matches', { itemId: report.id, itemDetails: report });
                 } else {
                   onNavigate('found-items');
                 }
@@ -116,27 +109,35 @@ export const MyReports: React.FC<MyReportsProps> = ({ onNavigate }) => {
             >
               <div className="flex items-center gap-4">
                 <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 dark:bg-[#222523] shrink-0 border border-gray-200 dark:border-[#2f3330]">
-                  <img
-                    src={report.image_url || 'https://images.unsplash.com/photo-1544816155-12df9643f363?w=500&auto=format&fit=crop&q=80'}
-                    alt={report.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                  />
+                  {report.image_url ? (
+                    <img
+                      src={report.image_url}
+                      alt={report.title || 'Item report'}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-gray-400">
+                      <span className="material-symbols-outlined text-[24px]">inventory_2</span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                      report.type === 'lost'
-                        ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
-                        : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
-                    }`}>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        report.type === 'lost'
+                          ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                          : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                      }`}
+                    >
                       {report.type === 'lost' ? 'Lost Report' : 'Found Report'}
                     </span>
                     <span className="text-xs text-gray-400 dark:text-[#949994]">{report.date_time}</span>
                   </div>
 
                   <h3 className="font-bold text-base text-gray-900 dark:text-[#f0f2f0] mt-1 group-hover:text-[#346b4f] dark:group-hover:text-[#99d3b0] transition-colors">
-                    {report.title}
+                    {report.title || `${report.color || ''} ${report.category || 'Belonging'}`}
                   </h3>
 
                   <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-[#949994] mt-0.5">
@@ -147,7 +148,7 @@ export const MyReports: React.FC<MyReportsProps> = ({ onNavigate }) => {
               </div>
 
               <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end border-t sm:border-t-0 pt-3 sm:pt-0 border-gray-100 dark:border-[#2f3330]">
-                <StatusBadge status={report.status} />
+                <StatusBadge status={report.status || 'active'} />
                 <span className="material-symbols-outlined text-gray-400 dark:text-[#949994] group-hover:text-[#346b4f] dark:group-hover:text-[#99d3b0] transition-colors text-[20px]">
                   chevron_right
                 </span>

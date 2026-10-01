@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { apiService } from '../services/api';
+import { apiService, getImageUrl } from '../services/api';
 
 interface SearchingProps {
   itemId: string;
@@ -12,25 +12,75 @@ export const Searching: React.FC<SearchingProps> = ({ itemId, itemDetails, onNav
   const [statusText, setStatusText] = useState('Comparing item details with community records...');
 
   useEffect(() => {
-    // Smooth visual progress counter
+    // Progress counter visualization
     const timer1 = setTimeout(() => {
       setProgress(55);
-      setStatusText('Analyzing color, shape, and location proximity...');
-    }, 1200);
+      setStatusText('Analyzing visual similarity and location proximity...');
+    }, 1000);
 
     const timer2 = setTimeout(() => {
       setProgress(85);
-      setStatusText('Shortlisting potential matches for your review...');
-    }, 2400);
+      setStatusText('Retrieving shortlisted matches from backend...');
+    }, 2000);
 
-    // Call backend API to fetch real matches
     let isCancelled = false;
 
     const fetchMatches = async () => {
       try {
-        const response = await apiService.getMatches(itemId).catch(() => {
-          return apiService.findMatches(itemId);
-        });
+        let resMatches: any[] = [];
+
+        // 1. Try to fetch already stored matches for this lost item
+        try {
+          const stored = await apiService.getMatches(itemId);
+          if (stored && stored.matches && stored.matches.length > 0) {
+            resMatches = stored.matches;
+          }
+        } catch {
+          // If no stored matches yet, initiate backend matching flow
+        }
+
+        // 2. If no matches retrieved yet, invoke findMatches
+        if (resMatches.length === 0) {
+          try {
+            const findRes = await apiService.findMatches(itemId);
+            if (findRes && findRes.matches) {
+              // Try to retrieve enriched match records with match IDs
+              try {
+                const listRes = await apiService.getMatches(itemId);
+                resMatches = listRes.matches && listRes.matches.length > 0 ? listRes.matches : findRes.matches;
+              } catch {
+                resMatches = findRes.matches;
+              }
+            }
+          } catch (err: any) {
+            console.warn('Matching request returned:', err.message);
+          }
+        }
+
+        // 3. Enrich candidate matches with real found item details from backend
+        const enrichedMatches = await Promise.all(
+          resMatches.map(async (m: any) => {
+            try {
+              if (m.found_item_id && (!m.title || !m.image_url)) {
+                const item = await apiService.getItem(m.found_item_id);
+                return {
+                  ...m,
+                  id: m.id || m.found_item_id,
+                  title: item.brand ? `${item.brand} ${item.category}` : `${item.color} ${item.category}`,
+                  category: item.category,
+                  color: item.color,
+                  location: item.location,
+                  date_time: item.date_time,
+                  description: item.description,
+                  image_url: getImageUrl(item.image_path),
+                };
+              }
+            } catch (itemErr) {
+              console.warn('Could not fetch details for found item:', m.found_item_id);
+            }
+            return m;
+          })
+        );
 
         if (!isCancelled) {
           setProgress(100);
@@ -38,42 +88,21 @@ export const Searching: React.FC<SearchingProps> = ({ itemId, itemDetails, onNav
             onNavigate('possible-matches', {
               itemId,
               itemDetails,
-              matches: response?.matches || [],
+              matches: enrichedMatches,
             });
-          }, 600);
+          }, 500);
         }
       } catch (err: any) {
-        console.warn('Match search API fallback:', err.message);
+        console.warn('Match search completed with empty result:', err.message);
         if (!isCancelled) {
           setProgress(100);
           setTimeout(() => {
             onNavigate('possible-matches', {
               itemId,
               itemDetails,
-              matches: [
-                {
-                  found_item_id: 'm_101',
-                  title: 'Black Leather Wallet',
-                  category: itemDetails?.category || 'Wallets',
-                  location: itemDetails?.location || 'Nearby Location',
-                  date_time: 'Today, 2 hours ago',
-                  image_url: 'https://images.unsplash.com/photo-1627123424574-724758594e93?w=500&auto=format&fit=crop&q=60',
-                  description: 'Black bifold wallet with card slots, found on public bench.',
-                  reasons: ['Similar color (Black)', 'Matching category (Wallet)', 'Proximity location radius'],
-                },
-                {
-                  found_item_id: 'm_102',
-                  title: 'Dark Blue Compact Wallet',
-                  category: itemDetails?.category || 'Wallets',
-                  location: 'Station Concourse',
-                  date_time: 'Today, 11:15 AM',
-                  image_url: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=500&auto=format&fit=crop&q=60',
-                  description: 'Dark blue wallet with leather texture.',
-                  reasons: ['Similar category', 'Nearby transit hub'],
-                },
-              ],
+              matches: [],
             });
-          }, 800);
+          }, 500);
         }
       }
     };

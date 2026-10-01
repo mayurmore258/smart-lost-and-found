@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { UploadBox } from '../components/UploadBox';
-import { apiService } from '../services/api';
+import { apiService, getImageUrl } from '../services/api';
 
 interface ReportLostProps {
   onNavigate: (path: string, params?: any) => void;
@@ -20,8 +20,20 @@ export const ReportLost: React.FC<ReportLostProps> = ({ onNavigate }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!image) {
+      setErrorMessage('Please upload a photo of the lost item.');
+      return;
+    }
+    if (!color.trim()) {
+      setErrorMessage('Please specify the primary color of the item.');
+      return;
+    }
     if (!location.trim()) {
       setErrorMessage('Please enter the location where you lost the item.');
+      return;
+    }
+    if (!description.trim()) {
+      setErrorMessage('Please provide distinctive features or details about your item.');
       return;
     }
 
@@ -30,31 +42,53 @@ export const ReportLost: React.FC<ReportLostProps> = ({ onNavigate }) => {
 
     try {
       const formData = new FormData();
-      if (image) {
-        formData.append('image', image);
-      }
+      formData.append('image', image);
       formData.append('category', category);
-      formData.append('color', color);
-      if (brand) formData.append('brand', brand);
-      formData.append('location', location);
-      formData.append('date_time', dateTime || new Date().toISOString());
-      formData.append('description', description);
+      formData.append('color', color.trim());
+      if (brand.trim()) formData.append('brand', brand.trim());
+      formData.append('location', location.trim());
+      formData.append('date_time', dateTime.trim() || new Date().toISOString());
+      formData.append('description', description.trim());
 
       const res = await apiService.createLostReport(formData);
-      const itemId = res.item_id || 'item_' + Date.now();
+      const itemId = res.id || res.item_id;
 
-      // Initiate matching request to backend
-      apiService.findMatches(itemId).catch((err) => {
-        console.warn('Initial background match request:', err.message);
+      // Save report locally so My Reports can display the user's submissions
+      const reportRecord = {
+        id: itemId,
+        item_id: itemId,
+        title: `${res.color} ${res.category}`,
+        type: 'lost',
+        category: res.category,
+        color: res.color,
+        brand: res.brand,
+        location: res.location,
+        date_time: res.date_time,
+        description: res.description,
+        image_url: getImageUrl(res.image_path),
+        image_path: res.image_path,
+        status: res.status || 'active',
+        created_at: res.created_at,
+      };
+
+      try {
+        const stored = JSON.parse(localStorage.getItem('smart_lost_found_user_reports') || '[]');
+        localStorage.setItem(
+          'smart_lost_found_user_reports',
+          JSON.stringify([reportRecord, ...stored.filter((r: any) => r.id !== itemId)])
+        );
+      } catch (storageErr) {
+        console.warn('LocalStorage save error:', storageErr);
+      }
+
+      // Navigate to searching screen with returned backend item ID
+      onNavigate('searching', {
+        itemId,
+        itemDetails: reportRecord,
       });
-
-      // Navigate to searching screen with item ID
-      onNavigate('searching', { itemId, itemDetails: { category, color, brand, location, description } });
     } catch (err: any) {
-      console.warn('Backend upload fallback:', err.message);
-      // Generate fallback local report ID if offline/backend unreachable
-      const fallbackId = 'lost_' + Date.now();
-      onNavigate('searching', { itemId: fallbackId, itemDetails: { category, color, brand, location, description } });
+      console.error('Lost report submission failed:', err);
+      setErrorMessage(err.message || 'Failed to submit lost report. Please check backend connection.');
     } finally {
       setLoading(false);
     }
@@ -79,7 +113,7 @@ export const ReportLost: React.FC<ReportLostProps> = ({ onNavigate }) => {
           Tell us about your lost item
         </h1>
         <p className="text-sm text-gray-600 dark:text-[#c5c9c5] mt-1">
-          Upload a photo if you have one and share key details so we can find potential matches.
+          Upload a photo and share key details so our AI can match with community-found records.
         </p>
       </div>
 
@@ -94,7 +128,7 @@ export const ReportLost: React.FC<ReportLostProps> = ({ onNavigate }) => {
         {/* Photo Upload Box */}
         <UploadBox
           onImageSelected={(file) => setImage(file)}
-          label="Photo of your item (Recommended)"
+          label="Photo of your item *"
           hint="Upload a photo from your camera roll or gallery"
         />
 
@@ -182,7 +216,7 @@ export const ReportLost: React.FC<ReportLostProps> = ({ onNavigate }) => {
         {/* Description / Distinctive marks */}
         <div>
           <label className="block text-sm font-semibold text-gray-900 dark:text-[#f0f2f0] mb-1.5">
-            Distinctive Features & Details
+            Distinctive Features & Details *
           </label>
           <textarea
             value={description}
@@ -190,6 +224,7 @@ export const ReportLost: React.FC<ReportLostProps> = ({ onNavigate }) => {
             rows={3}
             placeholder="Describe scratches, keychains, stickers, inner contents, or unique identifiers..."
             className="w-full bg-gray-50 dark:bg-[#222523] border border-gray-200 dark:border-[#2f3330] rounded-xl px-3.5 py-2.5 text-sm text-gray-900 dark:text-[#f0f2f0] focus:outline-none focus:border-[#346b4f]"
+            required
           />
         </div>
 

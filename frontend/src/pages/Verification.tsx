@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { apiService } from '../services/api';
 
 interface VerificationProps {
@@ -8,7 +8,7 @@ interface VerificationProps {
 }
 
 export const Verification: React.FC<VerificationProps> = ({
-  matchId = 'm_101',
+  matchId = '',
   match,
   onNavigate,
 }) => {
@@ -16,8 +16,29 @@ export const Verification: React.FC<VerificationProps> = ({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<'pending' | 'verified' | 'failed'>('pending');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [questionText, setQuestionText] = useState(
+    match?.verification_question || 'Can you describe any distinctive marking or accessory on your item?'
+  );
 
-  const questionText = match?.verification_question || 'What specific card, key, or distinctive item was kept inside?';
+  // Load the actual verification question from backend
+  useEffect(() => {
+    if (matchId) {
+      apiService
+        .getVerificationQuestion(matchId)
+        .then((data) => {
+          if (data && data.question) {
+            setQuestionText(data.question);
+          }
+          if (data && data.verified) {
+            setResult('verified');
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not fetch verification question from backend:', err.message);
+        });
+    }
+  }, [matchId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,21 +46,42 @@ export const Verification: React.FC<VerificationProps> = ({
       setErrorMessage('Please enter your answer to verify ownership.');
       return;
     }
+    if (!matchId) {
+      setErrorMessage('Invalid match ID. Cannot submit verification.');
+      return;
+    }
 
     setLoading(true);
     setErrorMessage(null);
 
     try {
-      const res = await apiService.verifyOwnership(matchId, answer);
-      if (res.status === 'verified') {
+      const res = await apiService.verifyOwnership(matchId, answer.trim());
+      if (res.verified) {
         setResult('verified');
+        setSuccessMessage(res.message || 'Ownership successfully verified!');
+
+        // Update local session status if available
+        try {
+          const stored = JSON.parse(localStorage.getItem('smart_lost_found_user_reports') || '[]');
+          const updated = stored.map((r: any) =>
+            r.id === match?.lost_item_id ? { ...r, status: 'verified' } : r
+          );
+          localStorage.setItem('smart_lost_found_user_reports', JSON.stringify(updated));
+        } catch (e) {
+          // Ignore storage update errors
+        }
       } else {
-        setResult('verified'); // Treat successful answer submission as verified
+        setResult('failed');
+        setErrorMessage(
+          res.message || 'Verification unsuccessful. Your answer did not confirm ownership of this item.'
+        );
       }
     } catch (err: any) {
-      console.warn('Backend verification fallback:', err.message);
-      // Fallback clean verification success state
-      setResult('verified');
+      console.error('Verification request failed:', err);
+      setResult('failed');
+      setErrorMessage(
+        err.message || 'Verification request failed. Please check backend connection and try again.'
+      );
     } finally {
       setLoading(false);
     }
@@ -61,22 +103,26 @@ export const Verification: React.FC<VerificationProps> = ({
         </h1>
 
         <p className="text-sm text-gray-600 dark:text-[#c5c9c5] mt-2 max-w-md">
-          Your answers match the recorded details. We have notified the person/station who holds this item so you can arrange a safe pickup.
+          {successMessage ||
+            'Your answer matched the recorded details. Item status has been updated to verified.'}
         </p>
 
         <div className="bg-gray-50 dark:bg-[#1c1e1d] border border-gray-200 dark:border-[#2f3330] p-6 rounded-2xl mt-6 w-full text-left space-y-3">
           <h3 className="text-sm font-bold text-gray-900 dark:text-[#f0f2f0] flex items-center gap-2">
             <span className="material-symbols-outlined text-[#346b4f] dark:text-[#99d3b0]">location_on</span>
-            <span>Pickup & Contact Desk</span>
+            <span>Recovery Details</span>
           </h3>
           <p className="text-xs text-gray-600 dark:text-[#c5c9c5]">
-            <strong>Location:</strong> {match?.location || 'Andheri West Station Master Desk'}
+            <strong>Location:</strong> {match?.location || 'Reported Location'}
           </p>
           <p className="text-xs text-gray-600 dark:text-[#c5c9c5]">
-            <strong>Reference Code:</strong> <code className="bg-gray-200 dark:bg-[#222523] px-2 py-0.5 rounded font-mono text-emerald-700 dark:text-[#99d3b0]">REC-{matchId.slice(-6).toUpperCase()}</code>
+            <strong>Match Reference:</strong>{' '}
+            <code className="bg-gray-200 dark:bg-[#222523] px-2 py-0.5 rounded font-mono text-emerald-700 dark:text-[#99d3b0]">
+              MATCH-{matchId ? matchId.slice(-6).toUpperCase() : 'VERIFIED'}
+            </code>
           </p>
           <p className="text-xs text-gray-500 dark:text-[#949994]">
-            Please bring a valid photo ID when claiming your item in person.
+            Please bring a valid photo ID when claiming your item.
           </p>
         </div>
 
@@ -111,7 +157,7 @@ export const Verification: React.FC<VerificationProps> = ({
         </button>
 
         <span className="text-xs font-semibold text-[#346b4f] dark:text-[#99d3b0] uppercase tracking-wider block">
-          Step 3 of 3 • Ownership Verification
+          Ownership Verification
         </span>
         <h1 className="text-3xl font-extrabold text-gray-900 dark:text-[#f0f2f0] tracking-tight mt-1">
           Verify Ownership
@@ -147,12 +193,12 @@ export const Verification: React.FC<VerificationProps> = ({
             type="text"
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
-            placeholder="Enter distinctive details (e.g. Metro card name, photo inside wallet, key fob brand)..."
+            placeholder="Enter distinctive details (e.g. markings, contents, serial numbers)..."
             className="w-full bg-gray-50 dark:bg-[#222523] border border-gray-200 dark:border-[#2f3330] rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-[#f0f2f0] focus:outline-none focus:border-[#346b4f]"
             required
           />
           <p className="text-xs text-gray-500 dark:text-[#949994] mt-2">
-            Only the person holding the item will review this to confirm your claim.
+            Your answer will be validated against community record details.
           </p>
         </div>
 
@@ -168,16 +214,16 @@ export const Verification: React.FC<VerificationProps> = ({
           <button
             type="submit"
             disabled={loading}
-            className="px-8 py-3 rounded-full bg-[#346b4f] hover:bg-[#3d7a5b] text-white text-sm font-semibold shadow-sm transition-all flex items-center gap-2"
+            className="px-8 py-3 rounded-full bg-[#346b4f] hover:bg-[#3d7a5b] text-white text-sm font-semibold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50"
           >
             {loading ? (
               <>
                 <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                <span>Checking...</span>
+                <span>Verifying...</span>
               </>
             ) : (
               <>
-                <span>Continue</span>
+                <span>Submit Answer</span>
                 <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
               </>
             )}
